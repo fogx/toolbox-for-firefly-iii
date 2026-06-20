@@ -38,7 +38,6 @@ COPY --from=builder /app/dist ./dist
 
 # Bundle the GLiNER2-PII model (FP32, ~1.2 GB).
 # Path matches PII_MODEL_PATH default in src/server/utils/piiScrubber.ts.
-COPY models/gliner2-pii /app/models/gliner2-pii
 
 # Set ownership
 RUN chown -R nodejs:nodejs /app
