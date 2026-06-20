@@ -3,16 +3,20 @@
  *
  * Sanitises transaction descriptions before they are sent to an external AI provider.
  *
- * Two-stage pipeline:
- *   1. Regex layer: deterministic ISO patterns (IBAN/BIC) and SEPA labels
- *      (MANDATSREF / CREDID / GLAEUBIGER-ID) and long bare digit runs.
- *   2. GLiNER2 multi-PII NER layer: replaces ADDRESS / EMAIL / PHONE and 40+ other
- *      sensitive entity types with a `[LABEL]` placeholder. PERSON, CITY, ORG are
- *      **kept** so the AI still has useful categorization signal.
+ * Two backends, selected via `SCRUB_BACKEND` env var:
  *
- * Model loading is lazy and one-shot. If the model directory is missing or fails to
- * load, the scrubber falls back to regex-only mode and logs a warning - we never
- * block AI calls because the NER layer is down.
+ *   - `presidio_http` (default): POST to a Presidio sidecar (PRESIDIO_URL,
+ *     default http://pii_scrubber:8000/scrub). Works on every CPU — required
+ *     on Pi 4 / Cortex-A72 where onnxruntime SIGILLs.
+ *
+ *   - `gliner2_local`: original in-process GLiNER2 ONNX path. Two-stage
+ *     pipeline (regex + GLiNER2 multi-PII NER). Requires onnxruntime-node
+ *     and a CPU with ARMv8.2-A dotprod (or x86_64). Kept for future Pi
+ *     upgrades / x86_64 deployments.
+ *
+ * Both backends return the same `ScrubResult` shape so callers (clients/ai.ts)
+ * are backend-agnostic. NER/HTTP failures fall back to regex-only output —
+ * we never block AI calls because the scrubber is down.
  */
 
 import path from 'node:path';
@@ -20,6 +24,25 @@ import fs from 'node:fs';
 import { createLogger } from './logger.js';
 
 const logger = createLogger('PIIScrubber');
+
+// -----------------------------------------------------------------------------
+// Backend selection
+// -----------------------------------------------------------------------------
+
+type Backend = 'presidio_http' | 'gliner2_local';
+
+function resolveBackend(): Backend {
+  const raw = (process.env.SCRUB_BACKEND ?? 'presidio_http').toLowerCase();
+  if (raw === 'gliner2_local' || raw === 'presidio_http') return raw;
+  logger.warn(`Unknown SCRUB_BACKEND=${raw}; defaulting to presidio_http.`);
+  return 'presidio_http';
+}
+
+const BACKEND: Backend = resolveBackend();
+const PRESIDIO_URL = process.env.PRESIDIO_URL ?? 'http://pii_scrubber:8000/scrub';
+
+logger.info(`PII scrub backend = ${BACKEND}` +
+  (BACKEND === 'presidio_http' ? ` (url=${PRESIDIO_URL})` : ''));
 
 // -----------------------------------------------------------------------------
 // Regex layer
@@ -246,8 +269,12 @@ function getModel(): Promise<NerModel | null> {
 /**
  * Preload the model at server boot. Optional - the first scrub call would
  * otherwise pay the load cost. Safe to call repeatedly.
+ *
+ * Only meaningful for the gliner2_local backend; presidio_http warms its own
+ * spaCy model in the sidecar container.
  */
 export async function warmupPiiScrubber(): Promise<void> {
+  if (BACKEND !== 'gliner2_local') return;
   await getModel();
 }
 
@@ -325,12 +352,56 @@ export interface ScrubResult {
 }
 
 /**
- * Scrub PII from a transaction description. Always returns a value; never
- * throws (NER failures fall back to regex-only output).
- *
- * The returned `text` is what should be forwarded to the AI provider.
+ * Call the Presidio sidecar over HTTP. On any failure (network / non-2xx /
+ * malformed JSON) we fall back to the local regex layer so AI calls keep
+ * working — matches the original "never block" contract.
  */
-export async function scrubPii(input: string): Promise<ScrubResult> {
+async function scrubViaPresidio(input: string): Promise<ScrubResult> {
+  const originalLen = input.length;
+  try {
+    const res = await fetch(PRESIDIO_URL, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ text: input, language: 'de' }),
+      // Cap the wait so a hung sidecar can't stall every AI call.
+      signal: AbortSignal.timeout(5_000),
+    });
+    if (!res.ok) {
+      throw new Error(`presidio sidecar ${res.status} ${res.statusText}`);
+    }
+    const json = (await res.json()) as {
+      text: string;
+      regex_hits: number;
+      ner_hits: number;
+      original_len: number;
+      redacted_len: number;
+    };
+    return {
+      text: json.text,
+      originalLen: json.original_len,
+      redactedLen: json.redacted_len,
+      regexHits: json.regex_hits,
+      nerHits: json.ner_hits,
+    };
+  } catch (err) {
+    logger.warn(
+      `Presidio sidecar call failed (${err instanceof Error ? err.message : err}); ` +
+        `falling back to local regex-only scrub.`
+    );
+    const after = applyRegex(input);
+    const cleaned = after.text.replace(/\s{2,}/g, ' ').trim();
+    return {
+      text: cleaned,
+      originalLen,
+      redactedLen: cleaned.length,
+      regexHits: after.hits,
+      nerHits: 0,
+    };
+  }
+}
+
+/** Original in-process GLiNER2 pipeline. Unchanged from pre-sidecar code. */
+async function scrubViaGliner2Local(input: string): Promise<ScrubResult> {
   const originalLen = input.length;
 
   // 1) Regex layer first - cheaper and deterministic.
@@ -345,17 +416,32 @@ export async function scrubPii(input: string): Promise<ScrubResult> {
   // Collapse double whitespace introduced by dropped tokens.
   const cleaned = afterNer.text.replace(/\s{2,}/g, ' ').trim();
 
-  const result: ScrubResult = {
+  return {
     text: cleaned,
     originalLen,
     redactedLen: cleaned.length,
     regexHits: afterRegex.hits,
     nerHits: afterNer.hits,
   };
+}
+
+/**
+ * Scrub PII from a transaction description. Always returns a value; never
+ * throws (NER/HTTP failures fall back to regex-only output).
+ *
+ * The returned `text` is what should be forwarded to the AI provider. The
+ * concrete backend is selected at module load via SCRUB_BACKEND.
+ */
+export async function scrubPii(input: string): Promise<ScrubResult> {
+  const result =
+    BACKEND === 'presidio_http'
+      ? await scrubViaPresidio(input)
+      : await scrubViaGliner2Local(input);
 
   logger.debug(
-    `[PII scrubbed: original_len=${result.originalLen}, redacted_len=${result.redactedLen}, ` +
-      `regex_hits=${result.regexHits}, ner_hits=${result.nerHits}]`
+    `[PII scrubbed: backend=${BACKEND}, original_len=${result.originalLen}, ` +
+      `redacted_len=${result.redactedLen}, regex_hits=${result.regexHits}, ` +
+      `ner_hits=${result.nerHits}]`
   );
 
   return result;
