@@ -46,6 +46,12 @@ if (!configValidation.valid) {
   }
 }
 
+// Optional URL prefix for subpath deployments (e.g. "/toolbox" when mounted
+// inside another app behind Caddy). Empty string = root, matching the legacy
+// standalone-subdomain layout. Trailing slashes are stripped so the value can
+// be concatenated as `${URL_BASE_PATH}/api` without double slashes.
+const URL_BASE_PATH = (process.env.URL_BASE_PATH || '').replace(/\/+$/, '');
+
 const app = express();
 
 // Security middleware (Helmet, trust proxy, x-powered-by)
@@ -73,16 +79,22 @@ app.use(csrfProtection);
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
-// API routes
-app.use('/api', routes);
+// API routes (mounted under URL_BASE_PATH when configured)
+app.use(`${URL_BASE_PATH}/api`, routes);
 
 // Serve static files in production
 if (config.nodeEnv === 'production') {
   const clientPath = path.resolve(__dirname, '../client');
-  app.use(express.static(clientPath));
+  if (URL_BASE_PATH) {
+    app.use(URL_BASE_PATH, express.static(clientPath));
+  } else {
+    app.use(express.static(clientPath));
+  }
 
-  // SPA fallback - Express 5 requires named wildcard parameter
-  app.get('*splat', (_req, res) => {
+  // SPA fallback - Express 5 requires named wildcard parameter.
+  // When mounted under a prefix, only catch requests at or below that prefix
+  // so we don't shadow neighbouring routes upstream.
+  app.get(`${URL_BASE_PATH}/*splat`, (_req, res) => {
     res.sendFile(path.join(clientPath, 'index.html'));
   });
 }
@@ -93,6 +105,7 @@ app.use(errorHandler);
 // Start server
 const server = app.listen(config.port, () => {
   loggers.server.info(`Toolbox for Firefly III server running on port ${config.port}`);
+  loggers.server.info(`URL base path: ${URL_BASE_PATH || '(root)'}`);
   loggers.server.info(`CORS origins: ${config.corsOrigins.join(', ')}`);
   loggers.server.info(`Environment: ${config.nodeEnv}`);
 

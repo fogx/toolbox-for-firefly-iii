@@ -5,6 +5,10 @@ import { visualizer } from 'rollup-plugin-visualizer';
 import { fileURLToPath, URL } from 'node:url';
 
 export default defineConfig(({ mode }) => ({
+  // Mount under a subpath when serving behind a reverse-proxy prefix
+  // (e.g. /toolbox/ inside Firefly). Vite resolves this at build time,
+  // so all asset URLs in the generated index.html are prefixed.
+  base: process.env.VITE_BASE || '/',
   plugins: [
     vue(),
     // Only use autoImport in production for tree-shaking

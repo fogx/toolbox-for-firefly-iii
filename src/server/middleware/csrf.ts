@@ -158,12 +158,15 @@ export function csrfTokenCookie(req: Request, res: Response, next: NextFunction)
   // Ensure we have a CSRF token in the session
   const token = getOrCreateCsrfToken(req);
 
-  // Set the CSRF token as a cookie (readable by JavaScript)
+  // Set the CSRF token as a cookie (readable by JavaScript).
+  // The cookie path must match where the SPA is served — when mounted under
+  // a subpath (e.g. /toolbox), the browser would otherwise not send the
+  // cookie back on XHRs to /toolbox/api/*.
   res.cookie(CSRF_COOKIE_NAME, token, {
     httpOnly: false, // Must be false so JavaScript can read it
     secure: shouldUseSecureCookies(),
     sameSite: 'lax', // Lax mode to allow OAuth redirect flows
-    path: '/',
+    path: process.env.COOKIE_PATH || '/',
   });
 
   next();
