@@ -1,4 +1,9 @@
 # ===========================
+# ML model weights (bundled into Docker image, never committed)
+# ===========================
+models/
+
+# ===========================
 # Dependencies
 # ===========================
 node_modules/

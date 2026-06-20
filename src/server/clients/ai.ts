@@ -1,6 +1,7 @@
 import OpenAI from 'openai';
 import { config, isAIConfigured } from '../config/index.js';
 import { createLogger } from '../utils/logger.js';
+import { scrubPii } from '../utils/piiScrubber.js';
 
 const logger = createLogger('AIClient');
 
@@ -134,6 +135,12 @@ export async function analyzeForCategory(
   const numericAmount = parseFloat(amount);
   const formattedAmount = isNaN(numericAmount) ? amount : numericAmount.toFixed(2);
 
+  // Scrub PII from the description before it leaves the host.
+  const scrubbed = await scrubPii(transactionDescription);
+  logger.debug(
+    `[PII scrubbed: original_len=${scrubbed.originalLen}, redacted_len=${scrubbed.redactedLen}, regex_hits=${scrubbed.regexHits}, ner_hits=${scrubbed.nerHits}]`
+  );
+
   const systemPrompt = `You are a financial categorization assistant. Your task is to suggest the most appropriate category for a transaction based on its description, amount, and type.
 
 Available categories: ${availableCategories.join(', ')}
@@ -148,7 +155,7 @@ Respond in JSON format with the following structure:
 If no category seems appropriate, use the category that best fits or suggest "Uncategorized" with low confidence.`;
 
   const userPrompt = `Transaction details:
-- Description: ${transactionDescription}
+- Description: ${scrubbed.text}
 - Amount: ${formattedAmount}
 - Type: ${type}
 
@@ -185,6 +192,12 @@ export async function analyzeForTags(
   const numericAmount = parseFloat(amount);
   const formattedAmount = isNaN(numericAmount) ? amount : numericAmount.toFixed(2);
 
+  // Scrub PII from the description before it leaves the host.
+  const scrubbed = await scrubPii(transactionDescription);
+  logger.debug(
+    `[PII scrubbed: original_len=${scrubbed.originalLen}, redacted_len=${scrubbed.redactedLen}, regex_hits=${scrubbed.regexHits}, ner_hits=${scrubbed.nerHits}]`
+  );
+
   const systemPrompt = `You are a financial tagging assistant. Your task is to suggest appropriate tags for a transaction based on its description, amount, and type.
 
 Available tags: ${availableTags.join(', ')}
@@ -208,7 +221,7 @@ Rules:
 - Maximum 5 suggestions`;
 
   const userPrompt = `Transaction details:
-- Description: ${transactionDescription}
+- Description: ${scrubbed.text}
 - Amount: ${formattedAmount}
 - Type: ${type}
 

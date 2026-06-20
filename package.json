@@ -1,6 +1,6 @@
 {
   "name": "toolbox-for-firefly-iii",
-  "version": "1.3.0",
+  "version": "1.3.0-scrub.1",
   "description": "A collection of tools to enhance and extend the functionality of Firefly III",
   "author": "Xenolphthalein",
   "license": "Unlicense",
@@ -46,6 +46,8 @@
     "bump": "tsx scripts/bump-version.ts"
   },
   "dependencies": {
+    "@huggingface/transformers": "^3.8.1",
+    "@lmoe/gliner-onnx": "^0.1.0",
     "axios": "^1.13.5",
     "axios-retry": "^4.5.0",
     "cors": "^2.8.6",
@@ -57,6 +59,7 @@
     "helmet": "^8.1.0",
     "memorystore": "^1.6.7",
     "multer": "^2.0.1",
+    "onnxruntime-node": "^1.21.0",
     "openai": "^6.16.0",
     "openid-client": "^6.8.1",
     "pinia-plugin-persistedstate": "^4.7.1",
