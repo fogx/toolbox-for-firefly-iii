@@ -10,7 +10,7 @@ const CSRF_TOKEN_HEADER = 'x-csrf-token';
 const CSRF_COOKIE_NAME = 'firefly_toolbox_csrf';
 
 const api = axios.create({
-  baseURL: '/api',
+  baseURL: import.meta.env.BASE_URL + "api",
   timeout: 60000, // 60 seconds for longer operations
   headers: {
     'Content-Type': 'application/json',
