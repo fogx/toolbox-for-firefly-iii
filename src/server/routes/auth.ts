@@ -138,7 +138,7 @@ router.get('/providers', async (_req: Request, res: Response) => {
       providers.push({
         method: 'oidc',
         name: 'Single Sign-On',
-        authUrl: '/api/auth/oidc/login',
+        authUrl: `${process.env.URL_BASE_PATH || ''}/api/auth/oidc/login`,
       });
     }
   }
@@ -148,7 +148,7 @@ router.get('/providers', async (_req: Request, res: Response) => {
     providers.push({
       method: 'firefly',
       name: 'Login with Firefly III',
-      authUrl: '/api/auth/firefly/login',
+      authUrl: `${process.env.URL_BASE_PATH || ''}/api/auth/firefly/login`,
     });
   }
 
