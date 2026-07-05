@@ -328,7 +328,7 @@ router.get('/firefly/login', (req: Request, res: Response) => {
   const redirectUri = `${config.appUrl}/api/auth/firefly/callback`;
 
   // Build Firefly III OAuth authorization URL
-  const authUrl = new URL('/oauth/authorize', config.firefly.apiUrl);
+  const authUrl = new URL('/oauth/authorize', process.env.FIREFLY_PUBLIC_URL || config.firefly.apiUrl);
   authUrl.searchParams.set('client_id', config.auth.fireflyOAuth.clientId);
   authUrl.searchParams.set('redirect_uri', redirectUri);
   authUrl.searchParams.set('response_type', 'code');
