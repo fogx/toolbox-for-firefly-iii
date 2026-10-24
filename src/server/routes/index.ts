@@ -10,6 +10,7 @@ import paypalRoutes from './paypal.js';
 import transactionsRoutes from './transactions.js';
 import converterRoutes from './converter.js';
 import fintsRoutes from './fints.js';
+import reviewRoutes from './review.js';
 
 const router = Router();
 
@@ -28,5 +29,6 @@ router.use('/paypal', requireAuth, paypalRoutes);
 router.use('/transactions', requireAuth, transactionsRoutes);
 router.use('/converter', requireAuth, converterRoutes);
 router.use('/fints', requireAuth, fintsRoutes);
+router.use('/review', requireAuth, reviewRoutes);
 
 export default router;

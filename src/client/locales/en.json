@@ -610,6 +610,7 @@
       }
     },
     "settings": {
+      "anthropic": "Anthropic (Claude)",
       "openai": "OpenAI",
       "ollama": "Ollama (Local)",
       "externalAIProvider": "External AI Provider",

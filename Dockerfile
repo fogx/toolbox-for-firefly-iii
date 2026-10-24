@@ -1,5 +1,5 @@
 # Build stage
-FROM node:20-alpine AS builder
+FROM node:26-slim AS builder
 
 WORKDIR /app
 
@@ -12,23 +12,30 @@ RUN npm ci
 # Copy source code
 COPY . .
 
+# Build-time base path for Vite. When deploying behind a reverse-proxy subpath
+# (e.g. /toolbox), pass `--build-arg VITE_BASE=/toolbox/` so all asset URLs
+# in the generated index.html are prefixed. Default `/` keeps the standalone
+# root-mounted layout working.
+ARG VITE_BASE=/
+ENV VITE_BASE=${VITE_BASE}
+
 # Build the application
 RUN npm run build
 
 # Production stage
-FROM node:20-alpine AS production
+FROM node:26-slim AS production
 
 WORKDIR /app
 
 # Create non-root user
-RUN addgroup -g 1001 -S nodejs && \
-    adduser -S nodejs -u 1001
+RUN groupadd --system --gid 1001 nodejs && \
+    useradd --system --uid 1001 --gid nodejs --create-home nodejs
 
 # Copy package files
 COPY package*.json ./
 
 # Install only production dependencies
-RUN npm ci --only=production && \
+RUN npm ci --omit=dev && \
     npm cache clean --force
 
 # Copy built assets from builder
@@ -47,9 +54,9 @@ EXPOSE 3000
 ENV NODE_ENV=production
 ENV PORT=3000
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD wget --no-verbose --tries=1 --spider http://localhost:3000/api/health || exit 1
+# Health check — respects URL_BASE_PATH so it works under subpath deployments.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=3 \
+  CMD node -e "require('http').get('http://localhost:3000' + (process.env.URL_BASE_PATH || '') + '/api/health', r => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))"
 
 # Start the application
 CMD ["node", "dist/server/index.js"]

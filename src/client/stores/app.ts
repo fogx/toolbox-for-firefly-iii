@@ -57,8 +57,10 @@ export const useAppStore = defineStore(
     const hasAI = computed(() => status.value?.aiConfigured ?? false);
     const aiProvider = computed(() => status.value?.aiProvider ?? 'none');
 
-    // External AI providers (like OpenAI) require user acknowledgment of data sharing
-    const isExternalAIProvider = computed(() => aiProvider.value === 'openai');
+    // External AI providers (OpenAI, Anthropic) require user acknowledgment of data sharing
+    const isExternalAIProvider = computed(
+      () => aiProvider.value === 'openai' || aiProvider.value === 'anthropic'
+    );
     const canUseAI = computed(() => {
       if (!hasAI.value) return false;
       // Local AI (ollama) doesn't require acknowledgment

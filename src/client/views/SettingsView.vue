@@ -453,6 +453,8 @@ function getAuthMethodColor(method: AuthMethod): string {
 
 function getAIProviderLabel(provider: string | undefined): string {
   switch (provider) {
+    case 'anthropic':
+      return t('views.settings.anthropic');
     case 'openai':
       return t('views.settings.openai');
     case 'ollama':

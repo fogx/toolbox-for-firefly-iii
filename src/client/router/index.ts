@@ -70,6 +70,12 @@ const routes: RouteRecordRaw[] = [
     meta: getToolMeta('/fints'),
   },
   {
+    path: '/review',
+    name: 'Review',
+    component: () => import('../views/ReviewView.vue'),
+    meta: getToolMeta('/review'),
+  },
+  {
     path: '/settings',
     name: 'Settings',
     component: () => import('../views/SettingsView.vue'),
@@ -78,7 +84,7 @@ const routes: RouteRecordRaw[] = [
 ];
 
 const router = createRouter({
-  history: createWebHistory(),
+  history: createWebHistory(import.meta.env.BASE_URL),
   routes,
 });
 

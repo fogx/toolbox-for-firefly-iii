@@ -54,6 +54,16 @@ export interface ToolWithStatus {
  * Frontend UI configuration for tools - maps backend tool names to UI metadata
  */
 export const TOOL_UI_CONFIG: Record<string, ToolUIConfig> = {
+  reviewCategorizer: {
+    id: 'reviewCategorizer',
+    titleKey: 'Review',
+    subtitleKey: 'Fast categorize with invoice context',
+    descriptionKey: 'Blast through uncategorized txns w/ Paperless previews + suggestions',
+    icon: 'mdi-lightning-bolt',
+    color: 'red',
+    route: '/review',
+    requiresAI: false,
+  },
   duplicateFinder: {
     id: 'duplicateFinder',
     titleKey: 'navigation.duplicates',
@@ -138,6 +148,7 @@ export const TOOL_UI_CONFIG: Record<string, ToolUIConfig> = {
 
 /** Ordered list of tool IDs for consistent display order */
 const TOOL_ORDER = [
+  'reviewCategorizer',
   'duplicateFinder',
   'subscriptionFinder',
   'aiCategorySuggestions',
