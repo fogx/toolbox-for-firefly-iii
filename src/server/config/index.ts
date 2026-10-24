@@ -18,7 +18,13 @@ dotenv.config({ debug: false });
 import type { AuthMethod } from '../../shared/types/auth.js';
 import crypto from 'crypto';
 
-export type AIProvider = 'openai' | 'ollama' | 'none';
+export type AIProvider = 'anthropic' | 'openai' | 'ollama' | 'none';
+
+/** Effort levels accepted by the Anthropic Messages API (`output_config.effort`). */
+export type AnthropicEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+
+export const DEFAULT_ANTHROPIC_MODEL = 'claude-haiku-5-5';
+export const DEFAULT_ANTHROPIC_BASE_URL = 'https://api.anthropic.com';
 
 export interface Config {
   port: number;
@@ -39,6 +45,8 @@ export interface Config {
     apiUrl: string;
     apiKey: string;
     model: string;
+    /** Anthropic only: thinking effort. Classification needs little, so default `low`. */
+    effort: AnthropicEffort;
   };
   fints: {
     productId: string;
@@ -105,11 +113,18 @@ function getOptionalBooleanEnvVar(key: string, defaultValue: boolean): boolean {
 
 function detectAIProvider(): AIProvider {
   const explicitProvider = getOptionalEnvVar('AI_PROVIDER', '').toLowerCase();
-  if (explicitProvider === 'openai' || explicitProvider === 'ollama') {
+  if (
+    explicitProvider === 'anthropic' ||
+    explicitProvider === 'openai' ||
+    explicitProvider === 'ollama'
+  ) {
     return explicitProvider;
   }
 
   // Auto-detect based on which API key is set
+  if (getOptionalEnvVar(anthropicApiKeyEnvName())) {
+    return 'anthropic';
+  }
   if (getOptionalEnvVar('OPENAI_API_KEY')) {
     return 'openai';
   }
@@ -120,7 +135,36 @@ function detectAIProvider(): AIProvider {
   return 'none';
 }
 
+/**
+ * Name of the env var holding the Anthropic API key. Defaults to
+ * ANTHROPIC_API_KEY; override with AI_API_KEY_ENV to read the key from a
+ * differently named variable.
+ */
+function anthropicApiKeyEnvName(): string {
+  return getOptionalEnvVar('AI_API_KEY_ENV', '') || 'ANTHROPIC_API_KEY';
+}
+
+function getAIApiKey(provider: AIProvider): string {
+  if (provider === 'anthropic') {
+    return getOptionalEnvVar(anthropicApiKeyEnvName(), '');
+  }
+  return getOptionalEnvVar('OPENAI_API_KEY', '');
+}
+
+const ANTHROPIC_EFFORTS: readonly AnthropicEffort[] = ['low', 'medium', 'high', 'xhigh', 'max'];
+
+function getAnthropicEffort(): AnthropicEffort {
+  const raw = getOptionalEnvVar('ANTHROPIC_EFFORT', 'low').trim().toLowerCase();
+  const match = ANTHROPIC_EFFORTS.find((e) => e === raw);
+  if (match) return match;
+  console.warn(`[Config] Unknown ANTHROPIC_EFFORT=${raw}; using low.`);
+  return 'low';
+}
+
 function getAIApiUrl(provider: AIProvider): string {
+  if (provider === 'anthropic') {
+    return getOptionalEnvVar('ANTHROPIC_BASE_URL', DEFAULT_ANTHROPIC_BASE_URL);
+  }
   if (provider === 'ollama') {
     return getOptionalEnvVar('OLLAMA_API_URL', 'http://localhost:11434');
   }
@@ -134,6 +178,9 @@ function getAIModel(provider: AIProvider): string {
   const explicitModel = getOptionalEnvVar('AI_MODEL');
   if (explicitModel) return explicitModel;
 
+  if (provider === 'anthropic') {
+    return getOptionalEnvVar('ANTHROPIC_MODEL', DEFAULT_ANTHROPIC_MODEL);
+  }
   if (provider === 'ollama') {
     return getOptionalEnvVar('OLLAMA_MODEL', 'llama3.2');
   }
@@ -286,8 +333,9 @@ export const config: Config = {
   ai: {
     provider: detectedProvider,
     apiUrl: getAIApiUrl(detectedProvider),
-    apiKey: getOptionalEnvVar('OPENAI_API_KEY', ''),
+    apiKey: getAIApiKey(detectedProvider),
     model: getAIModel(detectedProvider),
+    effort: getAnthropicEffort(),
   },
   fints: {
     // FinTS product registration ID - register at https://www.hbci-zka.de/register/hersteller.htm
@@ -330,7 +378,7 @@ export function isOpenAIConfigured(): boolean {
 
 export function isAIConfigured(): boolean {
   const provider = config.ai.provider;
-  if (provider === 'openai') {
+  if (provider === 'anthropic' || provider === 'openai') {
     return Boolean(config.ai.apiKey);
   }
   if (provider === 'ollama') {

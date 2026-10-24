@@ -1,4 +1,6 @@
+import Anthropic from '@anthropic-ai/sdk';
 import OpenAI from 'openai';
+import { z } from 'zod';
 import { config, isAIConfigured } from '../config/index.js';
 import { createLogger } from '../utils/logger.js';
 import { scrubPii } from '../utils/piiScrubber.js';
@@ -6,6 +8,12 @@ import { scrubPii } from '../utils/piiScrubber.js';
 const logger = createLogger('AIClient');
 
 let aiClient: OpenAI | null = null;
+let anthropicClient: Anthropic | null = null;
+
+// Classification answers are short JSON objects. Thinking tokens count toward
+// max_tokens, so leave headroom above the answer itself.
+const ANTHROPIC_MAX_TOKENS = 2048;
+const ANTHROPIC_TIMEOUT_MS = 60_000;
 
 // Timeout for AI requests (5 minutes for cold starts with Ollama)
 const AI_TIMEOUT_MS = 300000;
@@ -13,6 +21,9 @@ const AI_TIMEOUT_MS = 300000;
 export function getAIClient(): OpenAI {
   if (!isAIConfigured()) {
     throw new Error('AI is not configured. Please configure OpenAI or Ollama in settings.');
+  }
+  if (config.ai.provider === 'anthropic') {
+    throw new Error('getAIClient() serves OpenAI-compatible providers; use getAnthropicClient().');
   }
 
   if (!aiClient) {
@@ -49,8 +60,105 @@ function createAIClient(): OpenAI {
   throw new Error(`Unknown AI provider: ${provider}`);
 }
 
+export function getAnthropicClient(): Anthropic {
+  if (config.ai.provider !== 'anthropic' || !isAIConfigured()) {
+    throw new Error(
+      'Anthropic is not configured. Set AI_PROVIDER=anthropic and ANTHROPIC_API_KEY.'
+    );
+  }
+  if (!anthropicClient) {
+    logger.info(
+      `Creating Anthropic client (model: ${config.ai.model}, effort: ${config.ai.effort})`
+    );
+    anthropicClient = new Anthropic({
+      apiKey: config.ai.apiKey,
+      baseURL: config.ai.apiUrl || undefined,
+      timeout: ANTHROPIC_TIMEOUT_MS,
+      maxRetries: 2,
+    });
+  }
+  return anthropicClient;
+}
+
 export function reinitializeAIClient(): void {
   aiClient = null;
+  anthropicClient = null;
+}
+
+/** zod's enum needs a non-empty tuple; callers have already rejected empty lists. */
+function toEnumValues(values: string[]): [string, ...string[]] {
+  const unique = [...new Set(values)];
+  const [first, ...rest] = unique;
+  if (first === undefined) {
+    throw new Error('Cannot classify against an empty list');
+  }
+  return [first, ...rest];
+}
+
+function clampConfidence(value: number): number {
+  if (!Number.isFinite(value)) return 0;
+  return Math.min(1, Math.max(0, value));
+}
+
+/**
+ * One structured-output request to Claude. `jsonSchema` constrains the answer
+ * on the API side (category and tag names are enums, so Claude can only
+ * answer with names from the list); `validate` re-checks it locally.
+ *
+ * The schema is passed as-is rather than through the SDK's zod helper, which
+ * moves `enum` into the description instead of sending it as a constraint.
+ */
+async function classifyWithClaude<T>(
+  systemPrompt: string,
+  userPrompt: string,
+  jsonSchema: Record<string, unknown>,
+  validate: z.ZodType<T>
+): Promise<T> {
+  const client = getAnthropicClient();
+  const startTime = Date.now();
+  logger.debug(`AI request started (anthropic/${config.ai.model})`);
+
+  const response = await client.messages.create({
+    model: config.ai.model,
+    max_tokens: ANTHROPIC_MAX_TOKENS,
+    system: systemPrompt,
+    messages: [{ role: 'user', content: userPrompt }],
+    output_config: {
+      effort: config.ai.effort,
+      format: { type: 'json_schema', schema: jsonSchema },
+    },
+  });
+
+  const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+  logger.debug(
+    `AI response received in ${elapsed}s (stop_reason=${response.stop_reason}, ` +
+      `in=${response.usage.input_tokens}, out=${response.usage.output_tokens})`
+  );
+
+  if (response.stop_reason === 'refusal') {
+    throw new Error(
+      `AI declined the request${response.stop_details?.category ? ` (${response.stop_details.category})` : ''}`
+    );
+  }
+  if (response.stop_reason === 'max_tokens') {
+    throw new Error('AI response was cut off (max_tokens)');
+  }
+
+  const text = response.content
+    .filter((block) => block.type === 'text')
+    .map((block) => block.text)
+    .join('');
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    throw new Error('AI returned no parseable answer');
+  }
+  const result = validate.safeParse(parsed);
+  if (!result.success) {
+    throw new Error('AI answer did not match the expected schema');
+  }
+  return result.data;
 }
 
 export interface ChatMessage {
@@ -135,7 +243,8 @@ export async function analyzeForCategory(
   const numericAmount = parseFloat(amount);
   const formattedAmount = isNaN(numericAmount) ? amount : numericAmount.toFixed(2);
 
-  // Scrub PII from the description before it leaves the host.
+  // Scrub PII from the description before it leaves the host. Throws
+  // PiiScrubError when the scrubber is unavailable, so nothing is sent.
   const scrubbed = await scrubPii(transactionDescription);
   logger.debug(
     `[PII scrubbed: original_len=${scrubbed.originalLen}, redacted_len=${scrubbed.redactedLen}, regex_hits=${scrubbed.regexHits}, ner_hits=${scrubbed.nerHits}]`
@@ -160,6 +269,27 @@ If no category seems appropriate, use the category that best fits or suggest "Un
 - Type: ${type}
 
 Please suggest the most appropriate category.`;
+
+  if (config.ai.provider === 'anthropic') {
+    const names = toEnumValues([...availableCategories, 'Uncategorized']);
+    const jsonSchema = {
+      type: 'object',
+      properties: {
+        categoryName: { type: 'string', enum: names },
+        confidence: { type: 'number' },
+        reasoning: { type: 'string' },
+      },
+      required: ['categoryName', 'confidence', 'reasoning'],
+      additionalProperties: false,
+    };
+    const validate = z.object({
+      categoryName: z.enum(names),
+      confidence: z.number(),
+      reasoning: z.string(),
+    });
+    const result = await classifyWithClaude(systemPrompt, userPrompt, jsonSchema, validate);
+    return { ...result, confidence: clampConfidence(result.confidence) };
+  }
 
   const response = await chat(
     [
@@ -192,7 +322,8 @@ export async function analyzeForTags(
   const numericAmount = parseFloat(amount);
   const formattedAmount = isNaN(numericAmount) ? amount : numericAmount.toFixed(2);
 
-  // Scrub PII from the description before it leaves the host.
+  // Scrub PII from the description before it leaves the host. Throws
+  // PiiScrubError when the scrubber is unavailable, so nothing is sent.
   const scrubbed = await scrubPii(transactionDescription);
   logger.debug(
     `[PII scrubbed: original_len=${scrubbed.originalLen}, redacted_len=${scrubbed.redactedLen}, regex_hits=${scrubbed.regexHits}, ner_hits=${scrubbed.nerHits}]`
@@ -226,6 +357,44 @@ Rules:
 - Type: ${type}
 
 Please suggest appropriate tags.`;
+
+  if (config.ai.provider === 'anthropic') {
+    const names = toEnumValues(availableTags);
+    const jsonSchema = {
+      type: 'object',
+      properties: {
+        suggestions: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              tagName: { type: 'string', enum: names },
+              confidence: { type: 'number' },
+              reasoning: { type: 'string' },
+            },
+            required: ['tagName', 'confidence', 'reasoning'],
+            additionalProperties: false,
+          },
+        },
+      },
+      required: ['suggestions'],
+      additionalProperties: false,
+    };
+    const validate = z.object({
+      suggestions: z.array(
+        z.object({
+          tagName: z.enum(names),
+          confidence: z.number(),
+          reasoning: z.string(),
+        })
+      ),
+    });
+    const result = await classifyWithClaude(systemPrompt, userPrompt, jsonSchema, validate);
+    return result.suggestions
+      .filter((s) => !existingTags.includes(s.tagName))
+      .slice(0, 5)
+      .map((s) => ({ ...s, confidence: clampConfidence(s.confidence) }));
+  }
 
   const response = await chat(
     [
@@ -277,6 +446,29 @@ export async function testAIConnection(): Promise<{ success: boolean; message: s
         clearTimeout(timeoutId);
         if (error instanceof Error && error.name === 'AbortError') {
           return { success: false, message: 'Ollama connection timed out' };
+        }
+        throw error;
+      }
+    }
+
+    // For Anthropic, look up the configured model (checks key and model ID
+    // without running a request)
+    if (provider === 'anthropic') {
+      try {
+        await getAnthropicClient().models.retrieve(config.ai.model, null, {
+          timeout: CONNECTION_TEST_TIMEOUT_MS,
+          maxRetries: 0,
+        });
+        return { success: true, message: 'Successfully connected to Anthropic' };
+      } catch (error) {
+        if (error instanceof Anthropic.AuthenticationError) {
+          return { success: false, message: 'Invalid Anthropic API key' };
+        }
+        if (error instanceof Anthropic.NotFoundError) {
+          return { success: false, message: `Unknown Anthropic model: ${config.ai.model}` };
+        }
+        if (error instanceof Anthropic.APIConnectionTimeoutError) {
+          return { success: false, message: 'Anthropic connection timed out' };
         }
         throw error;
       }
