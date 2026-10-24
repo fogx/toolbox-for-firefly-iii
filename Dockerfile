@@ -1,7 +1,5 @@
 # Build stage
-# node:20-slim (Debian) is required: onnxruntime-node ships glibc binaries and
-# does not work on Alpine/musl.
-FROM node:20-slim AS builder
+FROM node:26-slim AS builder
 
 WORKDIR /app
 
@@ -25,7 +23,7 @@ ENV VITE_BASE=${VITE_BASE}
 RUN npm run build
 
 # Production stage
-FROM node:20-slim AS production
+FROM node:26-slim AS production
 
 WORKDIR /app
 
@@ -43,9 +41,6 @@ RUN npm ci --omit=dev && \
 # Copy built assets from builder
 COPY --from=builder /app/dist ./dist
 
-# Bundle the GLiNER2-PII model (FP32, ~1.2 GB).
-# Path matches PII_MODEL_PATH default in src/server/utils/piiScrubber.ts.
-
 # Set ownership
 RUN chown -R nodejs:nodejs /app
 
@@ -58,7 +53,6 @@ EXPOSE 3000
 # Set environment variables
 ENV NODE_ENV=production
 ENV PORT=3000
-ENV PII_MODEL_PATH=/app/models/gliner2-pii
 
 # Health check — respects URL_BASE_PATH so it works under subpath deployments.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=3 \

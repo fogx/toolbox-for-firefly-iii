@@ -1,34 +1,25 @@
 #!/usr/bin/env bash
-# Build & push the PII-scrubbing Docker image to ghcr.io.
-# Run this on a host with Docker + buildx multi-arch (the WSL distro used
-# by the Claude session did not have docker available, so this is left for
-# the user to execute locally or on the Pi build host).
+# Build the toolbox Docker image locally (e.g. on the Pi, arm64).
+#
+#   TAG=ghcr.io/fogx/toolbox-for-firefly-iii:1.4.0-claude.1 scripts/build-docker.sh
+#
+# VITE_BASE sets the subpath the UI is served under (default /toolbox/, as in
+# the home-finance-infra deployment). Set PUSH=1 to push the tag afterwards.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-if [ ! -d models/gliner2-pii ]; then
-  echo "ERROR: models/gliner2-pii not present in build context."
-  echo "Copy the FP32 ONNX model into ./models/gliner2-pii (config.json,"
-  echo "gliner2_config.json, tokenizer*, onnx/encoder.onnx, onnx/classifier.onnx,"
-  echo "onnx/span_rep.onnx, onnx/count_embed.onnx)."
-  exit 1
-fi
+TAG=${TAG:?set TAG, e.g. ghcr.io/fogx/toolbox-for-firefly-iii:1.4.0-claude.1}
+VITE_BASE=${VITE_BASE:-/toolbox/}
 
-TAG=${TAG:-ghcr.io/fogx/toolbox-for-firefly-iii:1.3.0-scrub.1}
-PLATFORMS=${PLATFORMS:-linux/arm64}
+echo "Building $TAG (VITE_BASE=$VITE_BASE) from $(git rev-parse --short HEAD)..."
+docker build \
+  --build-arg VITE_BASE="$VITE_BASE" \
+  --label org.opencontainers.image.revision="$(git rev-parse HEAD)" \
+  --label org.opencontainers.image.source=https://github.com/fogx/toolbox-for-firefly-iii \
+  -t "$TAG" \
+  .
 
-echo "Building $TAG for $PLATFORMS..."
-
-# Multi-arch path (preferred):
-if docker buildx version >/dev/null 2>&1; then
-  docker buildx build \
-    --platform "$PLATFORMS" \
-    -t "$TAG" \
-    --push \
-    .
-else
-  # Fallback: single-arch build + push.
-  docker build -t "$TAG" .
+if [ "${PUSH:-0}" = "1" ]; then
   docker push "$TAG"
 fi
