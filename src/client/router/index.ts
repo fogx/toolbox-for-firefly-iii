@@ -70,6 +70,12 @@ const routes: RouteRecordRaw[] = [
     meta: getToolMeta('/fints'),
   },
   {
+    path: '/review',
+    name: 'Review',
+    component: () => import('../views/ReviewView.vue'),
+    meta: getToolMeta('/review'),
+  },
+  {
     path: '/settings',
     name: 'Settings',
     component: () => import('../views/SettingsView.vue'),
