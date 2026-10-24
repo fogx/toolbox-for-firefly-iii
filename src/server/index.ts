@@ -4,7 +4,6 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { config, validateConfig } from './config/index.js';
 import { loggers } from './utils/logger.js';
-import { warmupPiiScrubber } from './utils/piiScrubber.js';
 import {
   errorHandler,
   createSessionMiddleware,
@@ -115,7 +114,9 @@ const server = app.listen(config.port, () => {
     loggers.server.warn('Firefly III API not configured');
   }
 
-  if (config.ai.provider === 'openai' && config.ai.apiKey) {
+  if (config.ai.provider === 'anthropic' && config.ai.apiKey) {
+    loggers.server.info(`AI: Anthropic configured (model: ${config.ai.model})`);
+  } else if (config.ai.provider === 'openai' && config.ai.apiKey) {
     loggers.server.info(`AI: OpenAI configured (model: ${config.ai.model})`);
   } else if (config.ai.provider === 'ollama' && config.ai.apiUrl) {
     loggers.server.info(
@@ -137,12 +138,6 @@ const server = app.listen(config.port, () => {
 
   if (config.fints.productId) {
     void preloadFinTSBankIndex();
-  }
-
-  if (process.env.PII_MODEL_PATH) {
-    warmupPiiScrubber().catch((err) =>
-      loggers.server.warn(`PII model preload failed: ${err instanceof Error ? err.message : String(err)}`)
-    );
   }
 });
 
